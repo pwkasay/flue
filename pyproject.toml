@@ -26,7 +26,10 @@ dependencies = [
     "rich>=13.0",
     "fastapi>=0.110",
     "uvicorn>=0.27",
-    "asyncpipe>=0.1.0",  # install from GitHub: pip install git+https://github.com/<USER>/asyncpipe.git
+    "weir>=0.1.0",  # install from GitHub: pip install git+https://github.com/pwkasay/weir.git
+    "asyncpg>=0.30",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.14",
 ]
 
 [project.optional-dependencies]

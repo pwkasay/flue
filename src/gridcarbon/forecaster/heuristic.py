@@ -16,10 +16,8 @@ If insufficient historical data is available, falls back to a hardcoded
 "typical NYISO" profile derived from published research.
 """
 
-
 import logging
 from datetime import datetime, timedelta
-from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..models.fuel_mix import CarbonIntensity
@@ -37,16 +35,46 @@ EASTERN = ZoneInfo("America/New_York")
 # when available, falling back to this when the store is empty.
 
 TYPICAL_HOURLY_PROFILE: dict[int, float] = {
-    0: 200, 1: 185, 2: 175, 3: 170, 4: 170, 5: 180,
-    6: 220, 7: 270, 8: 310, 9: 330, 10: 320, 11: 310,
-    12: 300, 13: 290, 14: 290, 15: 300, 16: 330, 17: 370,
-    18: 380, 19: 360, 20: 330, 21: 300, 22: 260, 23: 230,
+    0: 200,
+    1: 185,
+    2: 175,
+    3: 170,
+    4: 170,
+    5: 180,
+    6: 220,
+    7: 270,
+    8: 310,
+    9: 330,
+    10: 320,
+    11: 310,
+    12: 300,
+    13: 290,
+    14: 290,
+    15: 300,
+    16: 330,
+    17: 370,
+    18: 380,
+    19: 360,
+    20: 330,
+    21: 300,
+    22: 260,
+    23: 230,
 }
 
 # Seasonal multipliers (shoulder seasons are cleaner)
 SEASONAL_MULTIPLIER: dict[int, float] = {
-    1: 1.10, 2: 1.05, 3: 0.95, 4: 0.90, 5: 0.88, 6: 1.00,
-    7: 1.15, 8: 1.15, 9: 1.00, 10: 0.90, 11: 0.95, 12: 1.05,
+    1: 1.10,
+    2: 1.05,
+    3: 0.95,
+    4: 0.90,
+    5: 0.88,
+    6: 1.00,
+    7: 1.15,
+    8: 1.15,
+    9: 1.00,
+    10: 0.90,
+    11: 0.95,
+    12: 1.05,
 }
 
 # Weekend discount (~10-15% lower load)
@@ -164,9 +192,7 @@ class HeuristicForecaster:
         cache_key = (month, day_of_week)
         if cache_key not in self._profile_cache:
             # Try loading from store
-            hourly_avgs = self.store.get_hourly_averages(
-                month=month, day_of_week=day_of_week
-            )
+            hourly_avgs = self.store.get_hourly_averages(month=month, day_of_week=day_of_week)
             if len(hourly_avgs) >= 20:  # Need at least 20/24 hours covered
                 self._profile_cache[cache_key] = hourly_avgs
             else:
@@ -184,9 +210,7 @@ class HeuristicForecaster:
             base *= WEEKEND_MULTIPLIER
         return base
 
-    def _apply_weather_correction(
-        self, base_ci: float, weather: WeatherSnapshot
-    ) -> float:
+    def _apply_weather_correction(self, base_ci: float, weather: WeatherSnapshot) -> float:
         """Apply temperature and wind corrections to baseline CI."""
         corrected = base_ci
 

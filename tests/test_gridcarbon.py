@@ -5,14 +5,11 @@ Tests cover:
 2. Emission factor lookups
 3. NYISO CSV parsing
 4. Heuristic forecaster
-5. Storage read/write
+5. Storage read/write (Postgres)
 6. Forecast window finding
 """
 
-
-import tempfile
 from datetime import datetime, timedelta
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -29,9 +26,10 @@ from gridcarbon.sources.emission_factors import (
     get_factor,
     all_factors_summary,
 )
-from gridcarbon.storage.store import Store
 from gridcarbon.forecaster.heuristic import HeuristicForecaster
 from gridcarbon.sources.weather import WeatherSnapshot
+
+from conftest import requires_postgres
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -207,15 +205,12 @@ class TestForecast:
         assert d["cleanest_3h_window"] is not None
 
 
-# ── Storage Tests ──
+# ── Storage Tests (Postgres) ──
 
 
+@requires_postgres
 class TestStore:
-    def _temp_store(self):
-        return Store(db_path=Path(tempfile.mktemp(suffix=".db")))
-
-    def test_save_and_retrieve(self):
-        store = self._temp_store()
+    def test_save_and_retrieve(self, sync_store):
         now = datetime.now(EASTERN)
         mix = FuelMix(
             timestamp=now,
@@ -225,38 +220,35 @@ class TestStore:
             ],
         )
 
-        store.save_fuel_mix(mix)
-        assert store.record_count() == 1
+        sync_store.save_fuel_mix(mix)
+        assert sync_store.record_count() == 1
 
-        latest = store.get_latest_intensity()
+        latest = sync_store.get_latest_intensity()
         assert latest is not None
         assert latest["grams_co2_per_kwh"] > 0
-        store.close()
 
-    def test_bulk_save(self):
-        store = self._temp_store()
+    def test_bulk_save(self, sync_store):
         now = datetime.now(EASTERN)
         mixes = []
         for i in range(10):
-            mixes.append(FuelMix(
-                timestamp=now + timedelta(minutes=5 * i),
-                fuels=[
-                    FuelGeneration(fuel=NYISOFuelCategory.NATURAL_GAS, generation_mw=5000),
-                    FuelGeneration(fuel=NYISOFuelCategory.NUCLEAR, generation_mw=3000),
-                ],
-            ))
+            mixes.append(
+                FuelMix(
+                    timestamp=now + timedelta(minutes=5 * i),
+                    fuels=[
+                        FuelGeneration(fuel=NYISOFuelCategory.NATURAL_GAS, generation_mw=5000),
+                        FuelGeneration(fuel=NYISOFuelCategory.NUCLEAR, generation_mw=3000),
+                    ],
+                )
+            )
 
-        count = store.save_fuel_mixes(mixes)
+        count = sync_store.save_fuel_mixes(mixes)
         assert count == 10
-        assert store.record_count() == 10
-        store.close()
+        assert sync_store.record_count() == 10
 
-    def test_hourly_averages(self):
-        store = self._temp_store()
-        # Use naive UTC timestamps so SQLite strftime works correctly
-        base = datetime(2024, 6, 15, 0, 0, 0)
+    def test_hourly_averages(self, sync_store):
+        # Use timezone-aware timestamps for Postgres
+        base = datetime(2024, 6, 15, 0, 0, 0, tzinfo=EASTERN)
 
-        # Insert data for multiple hours
         for h in range(24):
             ts = base.replace(hour=h)
             mix = FuelMix(
@@ -264,25 +256,20 @@ class TestStore:
                 fuels=[
                     FuelGeneration(
                         fuel=NYISOFuelCategory.NATURAL_GAS,
-                        generation_mw=3000 + h * 100,  # More gas at later hours
+                        generation_mw=3000 + h * 100,
                     ),
                     FuelGeneration(fuel=NYISOFuelCategory.NUCLEAR, generation_mw=3000),
                 ],
             )
-            store.save_fuel_mix(mix)
+            sync_store.save_fuel_mix(mix)
 
-        avgs = store.get_hourly_averages()
-        assert len(avgs) >= 20  # Should have most hours covered
-        # CI = gas_mw * 450 / (gas_mw + 3000)
-        # h=3: 3300*450/6300 = 235.7
-        # h=20: 5000*450/8000 = 281.25
-        # So later hours should have higher CI
+        avgs = sync_store.get_hourly_averages()
+        assert len(avgs) >= 20
+        # Later hours have more gas, so higher CI
         if 3 in avgs and 20 in avgs:
             assert avgs[20] > avgs[3]
-        store.close()
 
-    def test_date_range(self):
-        store = self._temp_store()
+    def test_date_range(self, sync_store):
         now = datetime.now(EASTERN)
 
         for i in range(5):
@@ -292,40 +279,77 @@ class TestStore:
                     FuelGeneration(fuel=NYISOFuelCategory.NATURAL_GAS, generation_mw=5000),
                 ],
             )
-            store.save_fuel_mix(mix)
+            sync_store.save_fuel_mix(mix)
 
-        earliest, latest = store.date_range()
+        earliest, latest = sync_store.date_range()
         assert earliest is not None
         assert latest is not None
-        store.close()
+
+    def test_log_event(self, sync_store):
+        sync_store.log_event(
+            event_type="test_event",
+            stage_name="test_stage",
+            message="Test message",
+            details={"key": "value"},
+        )
+
+        events = sync_store.get_recent_events(limit=10)
+        assert len(events) == 1
+        assert events[0]["event_type"] == "test_event"
+        assert events[0]["stage_name"] == "test_stage"
+        assert events[0]["message"] == "Test message"
+
+    def test_get_recent_events_filter(self, sync_store):
+        sync_store.log_event(event_type="success", message="ok")
+        sync_store.log_event(event_type="failure", message="bad")
+        sync_store.log_event(event_type="failure", message="worse")
+
+        all_events = sync_store.get_recent_events(limit=10)
+        assert len(all_events) == 3
+
+        failures = sync_store.get_recent_events(limit=10, event_type="failure")
+        assert len(failures) == 2
+
+    def test_ingestion_status(self, sync_store):
+        status = sync_store.get_ingestion_status()
+        assert status["total_records"] == 0
+        assert status["is_active"] is False
+
+        # Add a record
+        now = datetime.now(EASTERN)
+        mix = FuelMix(
+            timestamp=now,
+            fuels=[
+                FuelGeneration(fuel=NYISOFuelCategory.NATURAL_GAS, generation_mw=5000),
+            ],
+        )
+        sync_store.save_fuel_mix(mix)
+
+        status = sync_store.get_ingestion_status()
+        assert status["total_records"] == 1
 
 
 # ── Forecaster Tests ──
 
 
+@requires_postgres
 class TestHeuristicForecaster:
-    def _make_forecaster(self):
-        store = Store(db_path=Path(tempfile.mktemp(suffix=".db")))
-        return HeuristicForecaster(store), store
-
-    def test_forecast_without_data(self):
+    def test_forecast_without_data(self, sync_store):
         """Should work with fallback profile even with empty store."""
-        forecaster, store = self._make_forecaster()
+        forecaster = HeuristicForecaster(sync_store)
         fc = forecaster.forecast(hours=24)
         assert fc.forecast_hours == 24
         assert all(h.predicted_intensity.grams_co2_per_kwh > 0 for h in fc.hourly)
-        store.close()
 
-    def test_forecast_with_weather(self):
+    def test_forecast_with_weather(self, sync_store):
         """Weather corrections should shift the forecast."""
-        forecaster, store = self._make_forecaster()
+        forecaster = HeuristicForecaster(sync_store)
         now = datetime.now(EASTERN)
 
-        # Hot weather should increase CI
         hot_weather = [
             WeatherSnapshot(
                 timestamp=now + timedelta(hours=h),
-                temperature_f=100,  # Very hot
+                temperature_f=100,
                 wind_speed_80m_mph=5,
                 cloud_cover_pct=0,
             )
@@ -335,8 +359,8 @@ class TestHeuristicForecaster:
         mild_weather = [
             WeatherSnapshot(
                 timestamp=now + timedelta(hours=h),
-                temperature_f=70,  # Comfortable
-                wind_speed_80m_mph=20,  # Windy
+                temperature_f=70,
+                wind_speed_80m_mph=20,
                 cloud_cover_pct=0,
             )
             for h in range(24)
@@ -348,28 +372,23 @@ class TestHeuristicForecaster:
         hot_avg = sum(h.predicted_intensity.grams_co2_per_kwh for h in hot_fc.hourly) / 24
         mild_avg = sum(h.predicted_intensity.grams_co2_per_kwh for h in mild_fc.hourly) / 24
 
-        assert hot_avg > mild_avg  # Hot weather should produce higher CI
-        store.close()
+        assert hot_avg > mild_avg
 
-    def test_persistence_blend(self):
+    def test_persistence_blend(self, sync_store):
         """Near-term forecast should be influenced by current actual CI."""
-        forecaster, store = self._make_forecaster()
+        forecaster = HeuristicForecaster(sync_store)
 
         high_current = CarbonIntensity(grams_co2_per_kwh=500)
         fc = forecaster.forecast(hours=24, current_intensity=high_current)
 
-        # First hour should be heavily influenced by current (500)
-        # Later hours should revert toward baseline (~200-350)
         first_hour = fc.hourly[0].predicted_intensity.grams_co2_per_kwh
         last_hour = fc.hourly[-1].predicted_intensity.grams_co2_per_kwh
-        assert first_hour > last_hour  # Persistence effect
-        store.close()
+        assert first_hour > last_hour
 
-    def test_forecast_max_48_hours(self):
-        forecaster, store = self._make_forecaster()
-        fc = forecaster.forecast(hours=100)  # Should be capped
+    def test_forecast_max_48_hours(self, sync_store):
+        forecaster = HeuristicForecaster(sync_store)
+        fc = forecaster.forecast(hours=100)
         assert fc.forecast_hours == 48
-        store.close()
 
 
 # ── NYISO CSV Parsing Tests ──

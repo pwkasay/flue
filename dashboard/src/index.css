@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Outfit', sans-serif;
+  background: #0A0A0F;
+  overflow-x: hidden;
+}
+
+.font-data {
+  font-family: 'DM Mono', monospace;
+}
+
+.gradient-mesh {
+  background:
+    radial-gradient(ellipse 80% 60% at 10% 20%, rgba(34,197,94,0.04) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 85% 75%, rgba(255,214,10,0.03) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 50% at 50% 50%, rgba(99,102,241,0.02) 0%, transparent 60%);
+}
+
+.card-glow {
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.03),
+    0 1px 2px rgba(0,0,0,0.3),
+    0 8px 24px rgba(0,0,0,0.2);
+}
+
+.card-glow:hover {
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.06),
+    0 2px 4px rgba(0,0,0,0.3),
+    0 12px 32px rgba(0,0,0,0.3);
+}
+
+@keyframes glow-shift {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.7; }
+}
+
+.glow-shift {
+  animation: glow-shift 4s ease-in-out infinite;
+}
+
+/* Recharts overrides */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: rgba(255,255,255,0.04) !important;
+}
+
+.recharts-text {
+  fill: #6B7280 !important;
+  font-family: 'DM Mono', monospace !important;
+  font-size: 11px !important;
+}

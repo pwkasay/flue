@@ -18,7 +18,6 @@ The NYISO fuel categories are:
 - "Hydro"            → Niagara, St. Lawrence, run-of-river
 """
 
-
 from dataclasses import dataclass
 from enum import Enum
 
@@ -54,6 +53,7 @@ class NYISOFuelCategory(str, Enum):
         result = ALIASES.get(normalized)
         if result is None:
             from ..models.exceptions import UnknownFuelCategory
+
             raise UnknownFuelCategory(
                 f"Unknown NYISO fuel category: '{label}'. "
                 f"Known categories: {', '.join(c.value for c in cls)}"

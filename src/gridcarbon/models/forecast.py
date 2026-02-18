@@ -5,8 +5,7 @@ A Forecast contains hourly CarbonIntensity predictions for a window
 dirtiest window, and when to schedule deferrable loads.
 """
 
-
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -31,7 +30,7 @@ class HourlyForecast:
         }
 
 
-@dataclass
+@dataclass(frozen=True)
 class ForecastWindow:
     """A time window identified as notable (cleanest, dirtiest, etc.)."""
 
@@ -55,7 +54,7 @@ class ForecastWindow:
         }
 
 
-@dataclass
+@dataclass(frozen=True)
 class Forecast:
     """Complete forecast with hourly predictions and recommendations.
 
@@ -88,9 +87,7 @@ class Forecast:
         """Find the N-hour window with the highest average carbon intensity."""
         return self._find_window(window_hours, minimize=False)
 
-    def _find_window(
-        self, window_hours: int, minimize: bool
-    ) -> ForecastWindow | None:
+    def _find_window(self, window_hours: int, minimize: bool) -> ForecastWindow | None:
         if len(self.hourly) < window_hours:
             return None
 
@@ -125,29 +122,33 @@ class Forecast:
         lines = [
             f"Grid Carbon Forecast for {self.region}",
             f"Generated: {self.generated_at.strftime('%Y-%m-%d %H:%M %Z')}",
-            f"",
+            "",
             f"Right now: {current.predicted_intensity.grams_co2_per_kwh:.0f} gCO₂/kWh "
             f"{current.predicted_intensity.category_label}",
             f"  → {current.predicted_intensity.recommendation}",
         ]
 
         if cleanest:
-            lines.extend([
-                f"",
-                f"Cleanest 3-hour window: {cleanest.start.strftime('%I:%M %p')} – "
-                f"{cleanest.end.strftime('%I:%M %p')}",
-                f"  → {cleanest.average_intensity.grams_co2_per_kwh:.0f} gCO₂/kWh "
-                f"({cleanest.average_intensity.category})",
-            ])
+            lines.extend(
+                [
+                    "",
+                    f"Cleanest 3-hour window: {cleanest.start.strftime('%I:%M %p')} – "
+                    f"{cleanest.end.strftime('%I:%M %p')}",
+                    f"  → {cleanest.average_intensity.grams_co2_per_kwh:.0f} gCO₂/kWh "
+                    f"({cleanest.average_intensity.category})",
+                ]
+            )
 
         if dirtiest:
-            lines.extend([
-                f"",
-                f"Dirtiest 3-hour window: {dirtiest.start.strftime('%I:%M %p')} – "
-                f"{dirtiest.end.strftime('%I:%M %p')}",
-                f"  → {dirtiest.average_intensity.grams_co2_per_kwh:.0f} gCO₂/kWh "
-                f"({dirtiest.average_intensity.category})",
-            ])
+            lines.extend(
+                [
+                    "",
+                    f"Dirtiest 3-hour window: {dirtiest.start.strftime('%I:%M %p')} – "
+                    f"{dirtiest.end.strftime('%I:%M %p')}",
+                    f"  → {dirtiest.average_intensity.grams_co2_per_kwh:.0f} gCO₂/kWh "
+                    f"({dirtiest.average_intensity.category})",
+                ]
+            )
 
         return "\n".join(lines)
 

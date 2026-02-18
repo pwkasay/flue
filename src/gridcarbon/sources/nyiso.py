@@ -12,11 +12,10 @@ This module provides both sync (for CLI/seeding) and async (for pipeline)
 interfaces to the same data.
 """
 
-
 import io
 import csv
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import AsyncIterator
 from zoneinfo import ZoneInfo
 
@@ -101,9 +100,7 @@ async def fetch_fuel_mix_async(
         resp.raise_for_status()
         return _parse_csv(resp.text, day)
     except httpx.HTTPStatusError as e:
-        raise NYISOFetchError(
-            f"NYISO returned {e.response.status_code} for {url}"
-        ) from e
+        raise NYISOFetchError(f"NYISO returned {e.response.status_code} for {url}") from e
     except httpx.RequestError as e:
         raise NYISOFetchError(f"Failed to fetch {url}: {e}") from e
     finally:
@@ -121,9 +118,7 @@ def fetch_fuel_mix_sync(day: date) -> list[FuelMix]:
         resp.raise_for_status()
         return _parse_csv(resp.text, day)
     except httpx.HTTPStatusError as e:
-        raise NYISOFetchError(
-            f"NYISO returned {e.response.status_code} for {url}"
-        ) from e
+        raise NYISOFetchError(f"NYISO returned {e.response.status_code} for {url}") from e
     except httpx.RequestError as e:
         raise NYISOFetchError(f"Failed to fetch {url}: {e}") from e
 
@@ -135,7 +130,7 @@ async def fetch_fuel_mix_range(
     """Fetch fuel mix data for a date range (async generator).
 
     Yields individual FuelMix snapshots across all days in the range.
-    Suitable as an asyncpipe source.
+    Suitable as an weir source.
     """
     async with httpx.AsyncClient(timeout=30.0) as client:
         current = start

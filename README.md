@@ -5,9 +5,9 @@ Real-time carbon intensity tracking and forecasting for the NYC / NYISO electric
 ## Prerequisites
 
 - **Python 3.14+**
-- **asyncpipe** — installed from GitHub (not yet on PyPI):
+- **weir** — installed from GitHub (not yet on PyPI):
   ```bash
-  pip install git+https://github.com/<USER>/asyncpipe.git
+  pip install git+https://github.com/pwkasay/weir.git
   ```
 
 ## Installation
@@ -32,6 +32,21 @@ gridcarbon forecast
 # Start the API server
 gridcarbon serve
 ```
+
+## Docker
+
+```bash
+# Build and start — API on :8000, dashboard on :3000
+docker compose up --build
+
+# Stop
+docker compose down
+
+# Stop and delete all data
+docker compose down -v
+```
+
+The first launch seeds 7 days of NYISO data automatically. Data persists in a Docker volume across restarts. Open http://localhost:3000 for the Canary dashboard (falls back to demo data while the API seeds).
 
 ## CLI Commands
 
@@ -75,10 +90,10 @@ curl "http://localhost:8000/history?hours=48"
 ## Running Tests
 
 ```bash
-# Unit tests (domain models, storage, forecaster — no asyncpipe needed)
+# Unit tests (domain models, storage, forecaster — no weir needed)
 pytest tests/test_gridcarbon.py
 
-# Pipeline integration tests (requires asyncpipe)
+# Pipeline integration tests (requires weir)
 pytest tests/test_pipeline_integration.py
 
 # All tests
@@ -95,7 +110,7 @@ ruff format --check src/ tests/
 NYISO (CSV, 5-min intervals)
     │
     ▼
-asyncpipe Pipeline
+weir Pipeline
     │
     ├── validate (≥3 fuels, positive generation, no negatives)
     │
@@ -108,7 +123,7 @@ asyncpipe Pipeline
      CLI  API  Forecaster
 ```
 
-**Data flow**: NYISO CSV → parse → FuelMix domain model (carbon intensity computed at init) → asyncpipe pipeline (validate → persist) → SQLite → CLI / API / Forecaster.
+**Data flow**: NYISO CSV → parse → FuelMix domain model (carbon intensity computed at init) → weir pipeline (validate → persist) → SQLite → CLI / API / Forecaster.
 
 ## Project Structure
 
@@ -124,7 +139,7 @@ src/gridcarbon/
 │   ├── weather.py            # Open-Meteo weather data (for forecast corrections)
 │   └── emission_factors.py   # Static EPA eGRID emission factor registry
 ├── pipeline/
-│   └── ingest.py             # asyncpipe stages: validate, persist
+│   └── ingest.py             # weir stages: validate, persist
 ├── forecaster/
 │   └── heuristic.py          # Historical avg + temp/wind corrections
 ├── storage/
@@ -180,7 +195,7 @@ cp .env.example .env
 - **EIA API** — hourly generation by fuel type (alternative/supplement to NYISO)
 - **WattTime** — marginal emissions validation
 - **ElectricityMaps** — cross-validation data source
-- **React dashboard** — web UI for visualizing intensity and forecasts
+- ~~**React dashboard**~~ — shipped as Canary (`dashboard/`, served via Docker on :3000)
 - **ML forecaster** — gradient-boosted or neural network model
 
 ## License

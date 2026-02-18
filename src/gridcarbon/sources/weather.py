@@ -9,7 +9,6 @@ Weather variables that affect NYISO carbon intensity:
 - Cloud cover: affects behind-the-meter solar contribution
 """
 
-
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -83,12 +82,14 @@ def _parse_hourly_response(data: dict) -> list[WeatherSnapshot]:
             wind_mph = wind_kmh * 0.621371
             cloud = clouds[i] if i < len(clouds) else 0
 
-            snapshots.append(WeatherSnapshot(
-                timestamp=ts,
-                temperature_f=round(temp_f, 1),
-                wind_speed_80m_mph=round(wind_mph, 1),
-                cloud_cover_pct=round(cloud, 1),
-            ))
+            snapshots.append(
+                WeatherSnapshot(
+                    timestamp=ts,
+                    temperature_f=round(temp_f, 1),
+                    wind_speed_80m_mph=round(wind_mph, 1),
+                    cloud_cover_pct=round(cloud, 1),
+                )
+            )
         except (ValueError, IndexError) as e:
             logger.debug("Skipping weather data point %d: %s", i, e)
             continue

@@ -7,11 +7,11 @@ Endpoints:
   GET /history              → Historical carbon intensity data
   GET /factors              → Emission factors used for calculations
   GET /health               → Health check
+  GET /admin/status         → Ingestion status for admin dashboard
+  GET /admin/events         → Recent ingestion events
 """
 
-
-import asyncio
-from datetime import date, datetime
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Query, HTTPException
@@ -23,45 +23,53 @@ from ..sources.weather import fetch_forecast as fetch_weather_forecast
 from ..sources.emission_factors import all_factors_summary
 from ..forecaster.heuristic import HeuristicForecaster
 from ..storage.store import Store
+from ..storage.async_store import AsyncStore
+
+# ── Shared state ──
+
+_async_store: AsyncStore | None = None
+_sync_store: Store | None = None
+_forecaster: HeuristicForecaster | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _async_store, _sync_store, _forecaster
+    _async_store = await AsyncStore.create()
+    _sync_store = Store()
+    _forecaster = HeuristicForecaster(_sync_store)
+    yield
+    if _async_store:
+        await _async_store.close()
+    if _sync_store:
+        _sync_store.close()
+
 
 app = FastAPI(
     title="gridcarbon",
     description="Real-time carbon intensity tracking and forecasting for the NYISO grid",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Shared state (initialized on startup) ──
 
-_store: Store | None = None
-_forecaster: HeuristicForecaster | None = None
-
-
-def get_store() -> Store:
-    global _store
-    if _store is None:
-        _store = Store()
-    return _store
+def get_async_store() -> AsyncStore:
+    if _async_store is None:
+        raise RuntimeError("Store not initialized — lifespan not started")
+    return _async_store
 
 
 def get_forecaster() -> HeuristicForecaster:
-    global _forecaster
     if _forecaster is None:
-        _forecaster = HeuristicForecaster(get_store())
+        raise RuntimeError("Forecaster not initialized — lifespan not started")
     return _forecaster
-
-
-@app.on_event("startup")
-async def startup() -> None:
-    get_store()
-    get_forecaster()
 
 
 # ── Endpoints ──
@@ -69,9 +77,9 @@ async def startup() -> None:
 
 @app.get("/")
 async def root() -> dict[str, Any]:
-    store = get_store()
-    count = store.record_count()
-    earliest, latest = store.date_range()
+    store = get_async_store()
+    count = await store.record_count()
+    earliest, latest = await store.date_range()
     return {
         "name": "gridcarbon",
         "version": "0.1.0",
@@ -82,13 +90,15 @@ async def root() -> dict[str, Any]:
             "earliest": earliest,
             "latest": latest,
         },
-        "endpoints": ["/now", "/forecast", "/history", "/factors", "/health"],
+        "endpoints": ["/now", "/forecast", "/history", "/factors", "/health", "/admin/status"],
     }
 
 
 @app.get("/now")
 async def current_intensity() -> dict[str, Any]:
     """Get the current grid carbon intensity with recommendation."""
+    store = get_async_store()
+
     # Try live data first
     try:
         latest_mix = await fetch_latest()
@@ -96,7 +106,7 @@ async def current_intensity() -> dict[str, Any]:
             ci = latest_mix.carbon_intensity
             # Also save it
             try:
-                get_store().save_fuel_mix(latest_mix)
+                await store.save_fuel_mix(latest_mix)
             except Exception:
                 pass
 
@@ -123,7 +133,7 @@ async def current_intensity() -> dict[str, Any]:
         pass
 
     # Fall back to stored data
-    stored = get_store().get_latest_intensity()
+    stored = await store.get_latest_intensity()
     if stored:
         ci_val = stored["grams_co2_per_kwh"]
         ci = CarbonIntensity(grams_co2_per_kwh=ci_val)
@@ -190,7 +200,8 @@ async def history(
     hours: int = Query(default=24, ge=1, le=720),
 ) -> dict[str, Any]:
     """Get historical carbon intensity data."""
-    records = get_store().get_carbon_intensity(hours=hours)
+    store = get_async_store()
+    records = await store.get_carbon_intensity(hours=hours)
     return {
         "hours": hours,
         "count": len(records),
@@ -211,3 +222,41 @@ async def emission_factors() -> dict[str, Any]:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# ── Admin Endpoints ──
+
+
+@app.get("/admin/status")
+async def admin_status() -> dict[str, Any]:
+    """Ingestion status for the admin dashboard."""
+    store = get_async_store()
+    status = await store.get_ingestion_status()
+
+    # Determine connector statuses
+    last_data = status["last_data_at"]
+    if status["is_active"]:
+        nyiso_status = "active"
+    elif last_data:
+        nyiso_status = "stale"
+    else:
+        nyiso_status = "inactive"
+
+    return {
+        "connectors": {
+            "nyiso": {"status": nyiso_status, "last_data_at": last_data},
+            "weather": {"status": "available"},
+        },
+        "ingestion": status,
+    }
+
+
+@app.get("/admin/events")
+async def admin_events(
+    limit: int = Query(default=50, ge=1, le=500),
+    event_type: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Recent ingestion events."""
+    store = get_async_store()
+    events = await store.get_recent_events(limit=limit, event_type=event_type)
+    return {"count": len(events), "events": events}

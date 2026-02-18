@@ -4,13 +4,12 @@ Follows the Cloverly unit-class pattern: canonical internal representation,
 named properties for conversions, composable via operators.
 """
 
-
+import functools
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from ..sources.emission_factors import (
-    EMISSION_FACTORS,
     NYISOFuelCategory,
     get_factor,
 )
@@ -51,7 +50,7 @@ class FuelMix:
     timezone_label: str = "US/Eastern"
 
     # Computed at init
-    _carbon_intensity: CarbonIntensity | None = field(default=None, repr=False)
+    _carbon_intensity: CarbonIntensity | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.fuels:
@@ -63,9 +62,7 @@ class FuelMix:
         if total_gen <= 0:
             return CarbonIntensity(grams_co2_per_kwh=0.0, timestamp=self.timestamp)
 
-        weighted_emissions = sum(
-            f.generation_mw * get_factor(f.fuel) for f in self.fuels
-        )
+        weighted_emissions = sum(f.generation_mw * get_factor(f.fuel) for f in self.fuels)
         ci = weighted_emissions / total_gen
         return CarbonIntensity(grams_co2_per_kwh=ci, timestamp=self.timestamp)
 
@@ -123,6 +120,7 @@ class FuelMix:
         }
 
 
+@functools.total_ordering
 @dataclass(frozen=True)
 class CarbonIntensity:
     """Carbon intensity at a point in time.
@@ -201,21 +199,14 @@ class CarbonIntensity:
 
     def __add__(self, other: CarbonIntensity) -> CarbonIntensity:
         """Sum (for accumulation before averaging)."""
-        return CarbonIntensity(
-            grams_co2_per_kwh=self.grams_co2_per_kwh + other.grams_co2_per_kwh
-        )
+        return CarbonIntensity(grams_co2_per_kwh=self.grams_co2_per_kwh + other.grams_co2_per_kwh)
 
     def __truediv__(self, other: int | float) -> CarbonIntensity:
         """Divide (for averaging)."""
-        return CarbonIntensity(
-            grams_co2_per_kwh=self.grams_co2_per_kwh / other
-        )
+        return CarbonIntensity(grams_co2_per_kwh=self.grams_co2_per_kwh / other)
 
     def __lt__(self, other: CarbonIntensity) -> bool:
         return self.grams_co2_per_kwh < other.grams_co2_per_kwh
-
-    def __le__(self, other: CarbonIntensity) -> bool:
-        return self.grams_co2_per_kwh <= other.grams_co2_per_kwh
 
     def __repr__(self) -> str:
         ts = self.timestamp.strftime("%H:%M") if self.timestamp else "?"
