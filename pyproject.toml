@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gridcarbon"
+version = "0.1.0"
+description = "Real-time carbon intensity tracking and forecasting for the NYISO grid"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+authors = [
+    { name = "Paul" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Framework :: FastAPI",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.0",
+    "typer>=0.12",
+    "rich>=13.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "asyncpipe>=0.1.0",  # install from GitHub: pip install git+https://github.com/<USER>/asyncpipe.git
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.0",
+    "ruff>=0.11",
+    "mypy>=1.0",
+    "respx>=0.21",
+]
+
+[project.scripts]
+gridcarbon = "gridcarbon.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gridcarbon"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+timeout = 30
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
