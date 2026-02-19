@@ -51,6 +51,69 @@ docker compose down -v
 
 The first launch seeds 7 days of NYISO data automatically. Data persists in a Docker volume across restarts. Open http://localhost:3000 for the Canary dashboard (falls back to demo data while the API seeds).
 
+## Exposing to the Internet (ngrok)
+
+You can expose the full stack (API + dashboard) to the internet using [ngrok](https://ngrok.com/).
+
+### Prerequisites
+
+1. Install ngrok: `brew install ngrok` (or [download](https://ngrok.com/download))
+2. Authenticate: `ngrok config add-authtoken <your-token>`
+
+### Steps
+
+**1. Create an ngrok config with both tunnels** (`~/.config/ngrok/tunnels.yml`):
+
+```yaml
+tunnels:
+  api:
+    addr: 8000
+    proto: http
+  dashboard:
+    addr: 3000
+    proto: http
+```
+
+**2. Start both tunnels:**
+
+```bash
+ngrok start --config ~/.config/ngrok/tunnels.yml --all
+```
+
+Note the two forwarding URLs ngrok assigns (e.g. `https://abc123.ngrok-free.app` for the API).
+
+**3. Rebuild the dashboard with the ngrok API URL:**
+
+```bash
+# Stop the dashboard container, rebuild with the ngrok API base, restart
+docker compose stop dashboard
+docker compose build --build-arg VITE_API_BASE=https://<your-api-subdomain>.ngrok-free.app dashboard
+docker compose up -d dashboard
+```
+
+The `VITE_API_BASE` build arg tells Vite to compile the dashboard with your ngrok API URL instead of `localhost:8000`. This is needed because Vite env vars are baked in at build time.
+
+**4. Share the dashboard tunnel URL** — anyone with the link can view the Canary dashboard.
+
+### ngrok browser warning bypass
+
+ngrok's free tier shows an interstitial warning page on first visit. The codebase already handles this automatically:
+
+- **API** — `NgrokBypassMiddleware` in `app.py` adds the `ngrok-skip-browser-warning` response header to all API responses
+- **Dashboard** — `nginx.conf` adds the same header to all static file responses
+
+No extra configuration needed.
+
+### Cleanup
+
+When done, stop ngrok (`Ctrl+C`) and optionally rebuild the dashboard without the build arg to restore localhost defaults:
+
+```bash
+docker compose stop dashboard
+docker compose build dashboard
+docker compose up -d dashboard
+```
+
 ## CLI Commands
 
 | Command | Description |

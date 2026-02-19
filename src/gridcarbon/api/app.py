@@ -15,8 +15,9 @@ Endpoints:
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..models.fuel_mix import CarbonIntensity
 from ..sources.nyiso import fetch_latest
@@ -53,6 +54,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+class NgrokBypassMiddleware(BaseHTTPMiddleware):
+    """Add header to bypass ngrok's free-tier browser warning interstitial."""
+
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["ngrok-skip-browser-warning"] = "true"
+        return response
+
+
+app.add_middleware(NgrokBypassMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
