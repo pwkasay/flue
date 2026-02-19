@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir git+https://github.com/pwkasay/weir.git@7a3ba72
+RUN pip install --no-cache-dir git+https://github.com/pwkasay/weir.git@9197b4e
 
 COPY pyproject.toml README.md ./
 COPY src/ src/

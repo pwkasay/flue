@@ -3,8 +3,8 @@
 Commands:
     gridcarbon now          Get current carbon intensity
     gridcarbon forecast     Get 24-hour forecast
-    gridcarbon seed         Seed historical data from NYISO
-    gridcarbon ingest       Run continuous ingestion
+    gridcarbon seed         Seed historical data from NYISO + weather
+    gridcarbon ingest       Run continuous ingestion (NYISO + weather)
     gridcarbon serve        Start the FastAPI server
     gridcarbon status       Show database status
 """
@@ -39,6 +39,21 @@ def _setup_logging(verbose: bool) -> None:
 def _redact_dsn(dsn: str) -> str:
     """Redact password from DSN for display."""
     return re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", dsn)
+
+
+def _print_pipeline_result(result, label: str = "") -> None:
+    """Display a PipelineResult's metrics in a consistent format."""
+    prefix = f"  [{label}] " if label else "  "
+    console.print(f"{prefix}Pipeline: {result.pipeline_name}")
+    console.print(f"{prefix}Duration: {result.duration_seconds:.1f}s")
+    console.print(f"{prefix}Dead letters: {result.dead_letters}")
+    for sm in result.stage_metrics:
+        p50 = sm.get("latency_p50")
+        lat = f"{p50 * 1000:.1f}ms" if p50 is not None else "n/a"
+        console.print(
+            f"{prefix}{sm['stage']}: {sm['items_out']}/{sm['items_in']} ok, "
+            f"{sm['items_errored']} errors, p50={lat}"
+        )
 
 
 @app.command()
@@ -185,9 +200,10 @@ def forecast(
 @app.command()
 def seed(
     days: int = typer.Option(30, "--days", "-d", help="Days of history to seed"),
+    no_weather: bool = typer.Option(False, "--no-weather", help="Skip weather data seeding"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Seed historical data from NYISO."""
+    """Seed historical data from NYISO and Open-Meteo weather."""
     _setup_logging(verbose)
 
     async def _run() -> None:
@@ -198,8 +214,9 @@ def seed(
         end_date = date.today() - timedelta(days=1)
         start_date = end_date - timedelta(days=days - 1)
 
+        sources = "NYISO" if no_weather else "NYISO + weather"
         console.print(
-            f"\nSeeding {days} days of NYISO data "
+            f"\nSeeding {days} days of {sources} data "
             f"({start_date.isoformat()} \u2192 {end_date.isoformat()})\n"
         )
 
@@ -216,21 +233,18 @@ def seed(
                     description=f"[green]{day.isoformat()}[/green] \u2014 {count} records",
                 )
 
-            result = await run_seed(
-                async_store, start_date, end_date, progress_callback=on_progress
+            nyiso_result, weather_result = await run_seed(
+                async_store,
+                start_date,
+                end_date,
+                progress_callback=on_progress,
+                include_weather=not no_weather,
             )
 
         console.print("\n[bold green]Seeding complete![/bold green]")
-        console.print(f"  Pipeline: {result.pipeline_name}")
-        console.print(f"  Duration: {result.duration_seconds:.1f}s")
-        console.print(f"  Dead letters: {result.dead_letters}")
-        for sm in result.stage_metrics:
-            p50 = sm.get("latency_p50")
-            lat = f"{p50 * 1000:.1f}ms" if p50 is not None else "n/a"
-            console.print(
-                f"  {sm['stage']}: {sm['items_out']}/{sm['items_in']} ok, "
-                f"{sm['items_errored']} errors, p50={lat}"
-            )
+        _print_pipeline_result(nyiso_result, "NYISO")
+        if weather_result:
+            _print_pipeline_result(weather_result, "Weather")
         console.print(f"  Database: {_redact_dsn(async_store.dsn)}")
 
         await async_store.close()
@@ -240,10 +254,13 @@ def seed(
 
 @app.command()
 def ingest(
-    interval: int = typer.Option(300, "--interval", "-i", help="Poll interval in seconds"),
+    interval: int = typer.Option(300, "--interval", "-i", help="NYISO poll interval in seconds"),
+    weather_interval: int = typer.Option(
+        3600, "--weather-interval", help="Weather poll interval in seconds"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Run continuous data ingestion from NYISO."""
+    """Run continuous data ingestion from NYISO and Open-Meteo weather."""
     _setup_logging(verbose)
 
     async def _run() -> None:
@@ -252,15 +269,20 @@ def ingest(
 
         async_store = await AsyncStore.create()
         console.print(
-            f"[bold green]Starting continuous ingestion[/bold green] "
-            f"(polling every {interval}s)\n"
+            f"[bold green]Starting continuous ingestion[/bold green]\n"
+            f"  NYISO:   polling every {interval}s\n"
+            f"  Weather: polling every {weather_interval}s\n"
             f"weir handles graceful shutdown \u2014 press Ctrl+C to stop.\n"
         )
         try:
-            result = await run_continuous(async_store, poll_interval_seconds=interval)
+            nyiso_result, weather_result = await run_continuous(
+                async_store,
+                poll_interval_seconds=interval,
+                weather_poll_interval_seconds=weather_interval,
+            )
             console.print("\n[yellow]Ingestion stopped.[/yellow]")
-            console.print(f"  Duration: {result.duration_seconds:.1f}s")
-            console.print(f"  Dead letters: {result.dead_letters}")
+            _print_pipeline_result(nyiso_result, "NYISO")
+            _print_pipeline_result(weather_result, "Weather")
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted.[/yellow]")
         finally:

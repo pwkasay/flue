@@ -281,6 +281,106 @@ class AsyncStore:
             for row in rows
         ]
 
+    async def save_pipeline_metrics(
+        self, pipeline_name: str, snapshots: list[dict[str, Any]]
+    ) -> None:
+        """Bulk-insert StageMetricsSnapshot dicts into pipeline_metrics."""
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    for s in snapshots:
+                        await conn.execute(
+                            """INSERT INTO pipeline_metrics
+                               (pipeline_name, stage_name, items_in, items_out,
+                                items_errored, items_retried, error_rate,
+                                throughput_per_sec, latency_p50, latency_p95,
+                                latency_p99, queue_depth, queue_utilization)
+                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)""",
+                            pipeline_name,
+                            s["stage"],
+                            s["items_in"],
+                            s["items_out"],
+                            s["items_errored"],
+                            s.get("items_retried", 0),
+                            s.get("error_rate"),
+                            s.get("throughput_per_sec"),
+                            s.get("latency_p50"),
+                            s.get("latency_p95"),
+                            s.get("latency_p99"),
+                            s.get("queue_depth"),
+                            s.get("queue_utilization"),
+                        )
+        except asyncpg.PostgresError as e:
+            logger.warning("Failed to save pipeline metrics: %s", e)
+
+    async def get_pipeline_metrics(
+        self, pipeline_name: str, hours: int = 1
+    ) -> list[dict[str, Any]]:
+        """Get recent pipeline metrics for a named pipeline."""
+        rows = await self._pool.fetch(
+            """SELECT timestamp, stage_name, items_in, items_out,
+                      items_errored, items_retried, error_rate,
+                      throughput_per_sec, latency_p50, latency_p95,
+                      latency_p99, queue_depth, queue_utilization
+               FROM pipeline_metrics
+               WHERE pipeline_name = $1
+                 AND timestamp > NOW() - make_interval(hours => $2)
+               ORDER BY timestamp DESC""",
+            pipeline_name,
+            hours,
+        )
+        return [
+            {
+                "timestamp": row["timestamp"].isoformat(),
+                "stage_name": row["stage_name"],
+                "items_in": row["items_in"],
+                "items_out": row["items_out"],
+                "items_errored": row["items_errored"],
+                "items_retried": row["items_retried"],
+                "error_rate": row["error_rate"],
+                "throughput_per_sec": row["throughput_per_sec"],
+                "latency_p50": row["latency_p50"],
+                "latency_p95": row["latency_p95"],
+                "latency_p99": row["latency_p99"],
+                "queue_depth": row["queue_depth"],
+                "queue_utilization": row["queue_utilization"],
+            }
+            for row in rows
+        ]
+
+    async def get_weather_freshness(self) -> dict[str, Any]:
+        """Query weather table freshness for admin status."""
+        row = await self._pool.fetchrow(
+            """SELECT
+                 MAX(timestamp) AS latest,
+                 (SELECT COUNT(*) FROM weather
+                  WHERE timestamp > NOW() - INTERVAL '1 hour') AS records_last_hour
+               FROM weather"""
+        )
+
+        latest = row["latest"] if row else None
+        records_last_hour = row["records_last_hour"] if row else 0
+
+        if latest:
+            from datetime import timezone
+
+            age = datetime.now(timezone.utc) - latest.astimezone(timezone.utc)
+            if age.total_seconds() < 7200:  # 2 hours (weather updates hourly)
+                weather_status = "active"
+            elif age.total_seconds() < 86400:
+                weather_status = "stale"
+            else:
+                weather_status = "inactive"
+        else:
+            weather_status = "inactive"
+
+        return {
+            "status": weather_status,
+            "last_data_at": latest.isoformat() if latest else None,
+            "records_last_hour": records_last_hour,
+            "provider": "Open-Meteo",
+        }
+
     async def get_ingestion_status(self) -> dict[str, Any]:
         """Derived ingestion status for the admin dashboard."""
         count = await self.record_count()

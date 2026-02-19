@@ -286,6 +286,37 @@ class Store:
             for row in rows
         ]
 
+    def get_weather_freshness(self) -> dict[str, Any]:
+        """Query weather table freshness for admin status."""
+        row = self._conn.execute(
+            """SELECT
+                 MAX(timestamp) AS latest,
+                 (SELECT COUNT(*) FROM weather
+                  WHERE timestamp > NOW() - INTERVAL '1 hour') AS records_last_hour
+               FROM weather"""
+        ).fetchone()
+
+        latest = row["latest"] if row else None
+        records_last_hour = row["records_last_hour"] if row else 0
+
+        if latest:
+            age = datetime.now(timezone.utc) - latest.astimezone(timezone.utc)
+            if age.total_seconds() < 7200:
+                weather_status = "active"
+            elif age.total_seconds() < 86400:
+                weather_status = "stale"
+            else:
+                weather_status = "inactive"
+        else:
+            weather_status = "inactive"
+
+        return {
+            "status": weather_status,
+            "last_data_at": latest.isoformat() if latest else None,
+            "records_last_hour": records_last_hour,
+            "provider": "Open-Meteo",
+        }
+
     def get_ingestion_status(self) -> dict[str, Any]:
         """Derived ingestion status for the admin dashboard."""
         count = self.record_count()

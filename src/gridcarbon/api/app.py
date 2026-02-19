@@ -1,14 +1,15 @@
 """FastAPI REST API for gridcarbon.
 
 Endpoints:
-  GET /                     → API info and status
-  GET /now                  → Current carbon intensity + recommendation
-  GET /forecast             → 24-hour forecast with cleanest/dirtiest windows
-  GET /history              → Historical carbon intensity data
-  GET /factors              → Emission factors used for calculations
-  GET /health               → Health check
-  GET /admin/status         → Ingestion status for admin dashboard
-  GET /admin/events         → Recent ingestion events
+  GET /                          → API info and status
+  GET /now                       → Current carbon intensity + recommendation
+  GET /forecast                  → 24-hour forecast with cleanest/dirtiest windows
+  GET /history                   → Historical carbon intensity data
+  GET /factors                   → Emission factors used for calculations
+  GET /health                    → Health check
+  GET /admin/status              → Ingestion status for admin dashboard
+  GET /admin/events              → Recent ingestion events
+  GET /admin/pipeline-metrics    → Pipeline stage metrics time series
 """
 
 from contextlib import asynccontextmanager
@@ -232,8 +233,9 @@ async def admin_status() -> dict[str, Any]:
     """Ingestion status for the admin dashboard."""
     store = get_async_store()
     status = await store.get_ingestion_status()
+    weather_freshness = await store.get_weather_freshness()
 
-    # Determine connector statuses
+    # Determine NYISO connector status
     last_data = status["last_data_at"]
     if status["is_active"]:
         nyiso_status = "active"
@@ -242,12 +244,24 @@ async def admin_status() -> dict[str, Any]:
     else:
         nyiso_status = "inactive"
 
+    # Fetch recent pipeline metrics for both pipelines
+    pipeline_metrics = {}
+    for name in ("gridcarbon-ingest", "gridcarbon-weather"):
+        metrics = await store.get_pipeline_metrics(name, hours=1)
+        if metrics:
+            pipeline_metrics[name] = metrics
+
     return {
         "connectors": {
-            "nyiso": {"status": nyiso_status, "last_data_at": last_data},
-            "weather": {"status": "available"},
+            "nyiso": {
+                "status": nyiso_status,
+                "last_data_at": last_data,
+                "records_last_hour": status["records_last_hour"],
+            },
+            "weather": weather_freshness,
         },
         "ingestion": status,
+        "pipeline_metrics": pipeline_metrics,
     }
 
 
@@ -260,3 +274,14 @@ async def admin_events(
     store = get_async_store()
     events = await store.get_recent_events(limit=limit, event_type=event_type)
     return {"count": len(events), "events": events}
+
+
+@app.get("/admin/pipeline-metrics")
+async def admin_pipeline_metrics(
+    pipeline: str = Query(description="Pipeline name (e.g. gridcarbon-ingest)"),
+    hours: int = Query(default=1, ge=1, le=24),
+) -> dict[str, Any]:
+    """Pipeline stage metrics time series for admin dashboard visualization."""
+    store = get_async_store()
+    metrics = await store.get_pipeline_metrics(pipeline, hours=hours)
+    return {"pipeline": pipeline, "hours": hours, "count": len(metrics), "metrics": metrics}

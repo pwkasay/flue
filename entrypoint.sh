@@ -19,5 +19,12 @@ if [ "$RECORD_COUNT" = "0" ]; then
     gridcarbon seed --days 7
 fi
 
-echo "Starting gridcarbon API server..."
-exec gridcarbon serve --host 0.0.0.0 --port 8000
+# If CMD was provided (e.g. docker-compose command override), run that.
+# Otherwise default to the API server.
+if [ $# -gt 0 ]; then
+    echo "Running command: $@"
+    exec "$@"
+else
+    echo "Starting gridcarbon API server..."
+    exec gridcarbon serve --host 0.0.0.0 --port 8000
+fi

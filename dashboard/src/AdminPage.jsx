@@ -19,6 +19,56 @@ function ConnectorLabel({ status }) {
   );
 }
 
+function LatestMetricsRow({ metrics }) {
+  if (!metrics || metrics.length === 0) return null;
+
+  // Group by stage_name, pick the most recent entry per stage
+  const byStage = {};
+  for (const m of metrics) {
+    if (!byStage[m.stage_name] || m.timestamp > byStage[m.stage_name].timestamp) {
+      byStage[m.stage_name] = m;
+    }
+  }
+
+  return Object.values(byStage).map((m) => (
+    <tr key={m.stage_name} className="border-b border-carbon-800/50">
+      <td className="py-1.5 pr-3 font-data text-gray-300 text-xs">{m.stage_name}</td>
+      <td className="py-1.5 pr-3 font-data text-gray-400 text-xs text-right">{m.items_in}</td>
+      <td className="py-1.5 pr-3 font-data text-gray-400 text-xs text-right">{m.items_out}</td>
+      <td className="py-1.5 pr-3 font-data text-xs text-right">
+        <span className={m.error_rate > 0 ? 'text-red-400' : 'text-gray-400'}>
+          {m.error_rate != null ? `${(m.error_rate * 100).toFixed(1)}%` : '-'}
+        </span>
+      </td>
+      <td className="py-1.5 pr-3 font-data text-gray-400 text-xs text-right">
+        {m.throughput_per_sec != null ? `${m.throughput_per_sec.toFixed(1)}/s` : '-'}
+      </td>
+      <td className="py-1.5 pr-3 font-data text-gray-400 text-xs text-right">
+        {m.latency_p50 != null ? `${(m.latency_p50 * 1000).toFixed(0)}ms` : '-'}
+      </td>
+      <td className="py-1.5 pr-3 font-data text-gray-400 text-xs text-right">
+        {m.latency_p95 != null ? `${(m.latency_p95 * 1000).toFixed(0)}ms` : '-'}
+      </td>
+      <td className="py-1.5 font-data text-xs text-right">
+        {m.queue_utilization != null ? (
+          <div className="flex items-center justify-end gap-1.5">
+            <div className="w-12 h-1.5 bg-carbon-800 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${Math.min(m.queue_utilization * 100, 100)}%`,
+                  backgroundColor: m.queue_utilization > 0.8 ? '#ef4444' : m.queue_utilization > 0.5 ? '#facc15' : '#22c55e',
+                }}
+              />
+            </div>
+            <span className="text-gray-500 w-8">{(m.queue_utilization * 100).toFixed(0)}%</span>
+          </div>
+        ) : '-'}
+      </td>
+    </tr>
+  ));
+}
+
 function AdminPage() {
   const [status, setStatus] = useState(null);
   const [events, setEvents] = useState(null);
@@ -57,6 +107,7 @@ function AdminPage() {
 
   const ingestion = status?.ingestion;
   const connectors = status?.connectors;
+  const pipelineMetrics = status?.pipeline_metrics;
 
   return (
     <div className="min-h-screen">
@@ -107,7 +158,7 @@ function AdminPage() {
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-gray-500 font-display">Records/hour</span>
-                    <span className="font-data text-gray-300">{ingestion?.records_last_hour ?? '-'}</span>
+                    <span className="font-data text-gray-300">{connectors.nyiso.records_last_hour ?? '-'}</span>
                   </div>
                 </div>
               </div>
@@ -120,7 +171,7 @@ function AdminPage() {
           </Card>
 
           {/* Weather Connector */}
-          <Card>
+          <Card glowColor={connectors?.weather?.status === 'active' ? '#22c55e' : undefined}>
             <CardTitle icon="Weather">Weather Source</CardTitle>
             {connectors ? (
               <div className="space-y-3">
@@ -130,12 +181,18 @@ function AdminPage() {
                 </div>
                 <div className="space-y-1.5">
                   <div className="flex justify-between text-xs">
-                    <span className="text-gray-500 font-display">Provider</span>
-                    <span className="font-data text-gray-300">Open-Meteo</span>
+                    <span className="text-gray-500 font-display">Last data</span>
+                    <span className="font-data text-gray-300">
+                      {connectors.weather?.last_data_at ? timeAgo(connectors.weather.last_data_at) : 'Never'}
+                    </span>
                   </div>
                   <div className="flex justify-between text-xs">
-                    <span className="text-gray-500 font-display">Used for</span>
-                    <span className="font-data text-gray-300">Forecast corrections</span>
+                    <span className="text-gray-500 font-display">Records/hour</span>
+                    <span className="font-data text-gray-300">{connectors.weather?.records_last_hour ?? '-'}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500 font-display">Provider</span>
+                    <span className="font-data text-gray-300">{connectors.weather?.provider || 'Open-Meteo'}</span>
                   </div>
                 </div>
               </div>
@@ -184,15 +241,26 @@ function AdminPage() {
         <Card>
           <CardTitle icon="Freshness">Data Freshness</CardTitle>
           {ingestion ? (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
               <div>
-                <p className="text-xs text-gray-500 font-display mb-1">Last Data Point</p>
+                <p className="text-xs text-gray-500 font-display mb-1">NYISO Last Data</p>
                 <p className="text-2xl font-bold font-data text-gray-200">
                   {ingestion.last_data_at ? timeAgo(ingestion.last_data_at) : 'Never'}
                 </p>
                 {ingestion.last_data_at && (
                   <p className="text-[10px] font-data text-gray-600 mt-1">
                     {new Date(ingestion.last_data_at).toLocaleString()}
+                  </p>
+                )}
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 font-display mb-1">Weather Last Data</p>
+                <p className="text-2xl font-bold font-data text-gray-200">
+                  {connectors?.weather?.last_data_at ? timeAgo(connectors.weather.last_data_at) : 'Never'}
+                </p>
+                {connectors?.weather?.last_data_at && (
+                  <p className="text-[10px] font-data text-gray-600 mt-1">
+                    {new Date(connectors.weather.last_data_at).toLocaleString()}
                   </p>
                 )}
               </div>
@@ -210,10 +278,58 @@ function AdminPage() {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-3 gap-6">
+            <div className="grid grid-cols-4 gap-6">
               <Skeleton className="h-16 w-full" />
               <Skeleton className="h-16 w-full" />
               <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-16 w-full" />
+            </div>
+          )}
+        </Card>
+
+        {/* ── Pipeline Performance ── */}
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <CardTitle icon="Pipeline">Pipeline Performance</CardTitle>
+            <span className="text-[10px] font-data text-gray-600">auto-refreshes every 30s</span>
+          </div>
+          {pipelineMetrics ? (
+            Object.keys(pipelineMetrics).length > 0 ? (
+              <div className="space-y-4">
+                {Object.entries(pipelineMetrics).map(([name, metrics]) => (
+                  <div key={name}>
+                    <p className="text-xs font-display text-gray-400 mb-2 uppercase tracking-wider">{name}</p>
+                    <div className="overflow-x-auto -mx-6 px-6">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-carbon-700/30">
+                            <th className="text-left py-1.5 pr-3 font-display font-medium text-gray-500 uppercase tracking-wider">Stage</th>
+                            <th className="text-right py-1.5 pr-3 font-display font-medium text-gray-500 uppercase tracking-wider">In</th>
+                            <th className="text-right py-1.5 pr-3 font-display font-medium text-gray-500 uppercase tracking-wider">Out</th>
+                            <th className="text-right py-1.5 pr-3 font-display font-medium text-gray-500 uppercase tracking-wider">Err%</th>
+                            <th className="text-right py-1.5 pr-3 font-display font-medium text-gray-500 uppercase tracking-wider">Thru</th>
+                            <th className="text-right py-1.5 pr-3 font-display font-medium text-gray-500 uppercase tracking-wider">p50</th>
+                            <th className="text-right py-1.5 pr-3 font-display font-medium text-gray-500 uppercase tracking-wider">p95</th>
+                            <th className="text-right py-1.5 font-display font-medium text-gray-500 uppercase tracking-wider">Queue</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <LatestMetricsRow metrics={metrics} />
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-gray-500 font-display text-sm">No pipeline metrics yet</p>
+                <p className="text-gray-600 font-display text-xs mt-1">Metrics appear after pipelines start running</p>
+              </div>
+            )
+          ) : (
+            <div className="space-y-2">
+              {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
             </div>
           )}
         </Card>
@@ -274,8 +390,8 @@ function AdminPage() {
       {/* Footer */}
       <footer className="border-t border-carbon-700/20 mt-8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between text-xs text-gray-600 font-display">
-          <span>Canary Admin \u00b7 gridcarbon v0.1.0</span>
-          <span>PostgreSQL \u00b7 weir pipeline</span>
+          <span>Canary Admin &middot; gridcarbon v0.1.0</span>
+          <span>PostgreSQL &middot; weir pipeline</span>
         </div>
       </footer>
     </div>
