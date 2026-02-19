@@ -1,10 +1,11 @@
 # gridcarbon
 
-Real-time carbon intensity tracking and forecasting for the NYC / NYISO electrical grid. Fetches fuel mix data from NYISO, calculates grid carbon intensity using EPA eGRID emission factors, stores history in SQLite, and forecasts the cleanest times to consume electricity.
+Real-time carbon intensity tracking and forecasting for the NYC / NYISO electrical grid. Fetches fuel mix data from NYISO, calculates grid carbon intensity using EPA eGRID emission factors, stores history in PostgreSQL, and forecasts the cleanest times to consume electricity.
 
 ## Prerequisites
 
 - **Python 3.14+**
+- **PostgreSQL 17+** (or use Docker, which handles this automatically)
 - **weir** — installed from GitHub (not yet on PyPI):
   ```bash
   pip install git+https://github.com/pwkasay/weir.git
@@ -19,17 +20,19 @@ pip install -e ".[dev]"
 
 ## Quick Start
 
+The fastest way to get running is Docker:
+
 ```bash
-# Seed 7 days of historical data from NYISO
+docker compose up --build
+# API on http://localhost:8000, dashboard on http://localhost:3000
+```
+
+Or install locally (requires PostgreSQL running):
+
+```bash
+pip install -e ".[dev]"
+alembic upgrade head
 gridcarbon seed --days 7
-
-# Get current carbon intensity
-gridcarbon now
-
-# Get 24-hour forecast
-gridcarbon forecast
-
-# Start the API server
 gridcarbon serve
 ```
 
@@ -73,6 +76,8 @@ Start the server with `gridcarbon serve`, then:
 | GET | `/history?hours=24` | Historical carbon intensity records |
 | GET | `/factors` | Emission factors used in calculations |
 | GET | `/health` | Health check |
+| GET | `/admin/status` | Ingestion status (connector health, record counts) |
+| GET | `/admin/events?limit=50&event_type=...` | Recent ingestion events (failures, starts/stops) |
 
 ### Examples
 
@@ -114,16 +119,20 @@ weir Pipeline
     │
     ├── validate (≥3 fuels, positive generation, no negatives)
     │
-    └── persist (SQLite, WAL mode, single-writer)
+    └── persist (PostgreSQL, AsyncStore)
             │
             ▼
-        SQLite Store
-       ┌────┼────┐
-       ▼    ▼    ▼
-     CLI  API  Forecaster
+       PostgreSQL
+       ┌────┼────────┐
+       ▼    ▼        ▼
+     CLI  API    Forecaster
+      │    │
+      │    └── /admin/status, /admin/events
+      │
+      └── Canary Dashboard (React, :3000)
 ```
 
-**Data flow**: NYISO CSV → parse → FuelMix domain model (carbon intensity computed at init) → weir pipeline (validate → persist) → SQLite → CLI / API / Forecaster.
+**Data flow**: NYISO CSV → parse → FuelMix domain model (carbon intensity computed at init) → weir pipeline (validate → persist) → PostgreSQL → CLI / API / Forecaster / Dashboard.
 
 ## Project Structure
 
@@ -143,11 +152,31 @@ src/gridcarbon/
 ├── forecaster/
 │   └── heuristic.py          # Historical avg + temp/wind corrections
 ├── storage/
-│   └── store.py              # SQLite read/write (raw sqlite3, WAL mode)
+│   ├── store.py              # Sync PostgreSQL (psycopg3) — CLI/forecaster
+│   └── async_store.py        # Async PostgreSQL (asyncpg) — pipeline/API
 ├── api/
-│   └── app.py                # FastAPI REST endpoints
+│   └── app.py                # FastAPI REST + admin endpoints
 └── cli/
     └── main.py               # Typer CLI with Rich output
+
+dashboard/
+├── src/
+│   ├── App.jsx               # Main dashboard (live intensity, forecast, fuel mix)
+│   ├── AdminPage.jsx         # Ingestion monitoring (connector status, failures)
+│   ├── shared.jsx            # Shared components (Card, StatusBadge, LiveDot)
+│   ├── config.js             # API_BASE via VITE_API_BASE env var
+│   └── main.jsx              # React entry point
+├── Dockerfile                # Multi-stage: Node build → nginx serve
+└── package.json
+
+alembic/
+├── env.py                    # Reads DATABASE_URL, rewrites for psycopg driver
+└── versions/
+    └── 001_initial_schema.py # fuel_mix, carbon_intensity, weather, ingestion_events
+
+Dockerfile                    # Python 3.14-slim backend image
+docker-compose.yml            # postgres + gridcarbon + ingest + dashboard
+entrypoint.sh                 # Migrations → seed → serve
 ```
 
 ## Carbon Intensity Calculation
@@ -188,14 +217,14 @@ cp .env.example .env
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GRIDCARBON_DB_PATH` | `~/.gridcarbon/gridcarbon.db` | SQLite database path |
+| `DATABASE_URL` | `postgresql://gridcarbon:gridcarbon@localhost:5432/gridcarbon` | PostgreSQL connection string |
+| `VITE_API_BASE` | `http://localhost:8000` | Dashboard API base URL |
 
 ## Not Yet Implemented
 
 - **EIA API** — hourly generation by fuel type (alternative/supplement to NYISO)
 - **WattTime** — marginal emissions validation
 - **ElectricityMaps** — cross-validation data source
-- ~~**React dashboard**~~ — shipped as Canary (`dashboard/`, served via Docker on :3000)
 - **ML forecaster** — gradient-boosted or neural network model
 
 ## License

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**gridcarbon** — Real-time carbon intensity tracking and forecasting for the NYC/NYISO electrical grid. Fetches fuel mix data from NYISO, calculates grid carbon intensity using EPA eGRID emission factors, stores historical data in SQLite, and forecasts cleanest electricity consumption windows using a heuristic model. The ingestion pipeline is built on **weir**, demonstrating the two projects composing together.
+**gridcarbon** — Real-time carbon intensity tracking and forecasting for the NYC/NYISO electrical grid. Fetches fuel mix data from NYISO, calculates grid carbon intensity using EPA eGRID emission factors, stores historical data in PostgreSQL, and forecasts cleanest electricity consumption windows using a heuristic model. The Canary dashboard provides live visualization and admin monitoring. The ingestion pipeline is built on **weir**, demonstrating the two projects composing together.
 
 ## Commands
 
@@ -27,7 +27,16 @@ ruff format src/ tests/
 # Type check
 mypy src/
 
-# CLI usage (after install)
+# Database migrations
+alembic upgrade head
+
+# Docker (simplest way to run everything)
+docker compose up --build          # Build and start all services
+docker compose down                # Stop services
+docker compose down -v             # Stop and delete all data
+docker compose logs -f gridcarbon  # Follow API logs
+
+# CLI usage (after install, requires Postgres running)
 gridcarbon now              # Current carbon intensity
 gridcarbon forecast         # 24-hour forecast
 gridcarbon seed --days 30   # Seed historical data
@@ -38,7 +47,7 @@ gridcarbon status           # Database stats
 
 ## Architecture
 
-The data flow is linear: **NYISO CSV → parse → FuelMix domain model (CI computed at init) → weir pipeline (validate → persist) → SQLite → CLI/API/Forecaster**.
+The data flow is linear: **NYISO CSV → parse → FuelMix domain model (CI computed at init) → weir pipeline (validate → persist) → PostgreSQL → CLI/API/Forecaster/Dashboard**.
 
 ### Key Design Patterns
 
@@ -46,6 +55,36 @@ The data flow is linear: **NYISO CSV → parse → FuelMix domain model (CI comp
 - **Eager computation**: `FuelMix.__post_init__` computes carbon intensity immediately at construction — no lazy evaluation.
 - **Exception hierarchy** (`models/exceptions.py`): `SyntacticException` (malformed input → HTTP 400) vs `SemanticException` (valid format, invalid meaning → HTTP 422), plus `DataSourceError` subtypes per external service. Pipeline adds `ValidationError` (extends `GridCarbonException`) for data quality failures.
 - **Sync + async interfaces**: NYISO source provides both `fetch_fuel_mix_sync` (for CLI/seeding) and `fetch_fuel_mix_async` (for pipeline). Storage splits into `Store` (psycopg3, sync — CLI/forecaster) and `AsyncStore` (asyncpg — pipeline/API). CLI commands wrap async calls in `asyncio.run()`.
+
+### Storage
+
+Dual sync/async pattern — `Store` (psycopg3, sync) for CLI/forecaster and `AsyncStore` (asyncpg, connection pool) for pipeline/API. Both provide identical methods (`save_fuel_mix`, `get_carbon_intensity`, `log_event`, etc.) but differ in driver conventions: psycopg3 uses `%s` parameter placeholders, asyncpg uses `$1`. Both auto-deserialize JSONB columns. `AsyncStore` is created via `await AsyncStore.create(dsn)` factory (pool `min_size=2, max_size=10`).
+
+### Admin / Ingestion Events
+
+The `ingestion_events` table provides an audit trail. `log_event(event_type, stage_name, message, details)` writes entries from both stores. Event types: `validation_failure`, `persist_failure`, `pipeline_start`, `pipeline_stop`. Admin API endpoints (`/admin/status`, `/admin/events`) expose this data for the dashboard.
+
+### Dashboard (Canary)
+
+React/Vite/Tailwind SPA served via nginx on `:3000`. Uses recharts for visualization (AreaChart for forecast, PieChart for fuel mix). Routes: `/` (live dashboard) and `/admin` (ingestion monitoring).
+
+- `config.js` — `API_BASE` sourced from `VITE_API_BASE` env var (defaults to `http://localhost:8000`)
+- `shared.jsx` — shared components (`Card`, `StatusBadge`, `LiveDot`, `Skeleton`), color systems (`INTENSITY_COLORS`, `FUEL_COLORS`), utilities (`fetchJSON`, `timeAgo`)
+- `App.jsx` — main dashboard with 5-minute auto-refresh, mock data fallback when API is unavailable
+- `AdminPage.jsx` — connector status cards, data freshness metrics, failures table (auto-refreshes every 30s)
+
+### Docker
+
+Multi-service architecture in `docker-compose.yml`:
+
+- **postgres** — PostgreSQL 17 Alpine with healthcheck (`pg_isready`), data persisted in `pgdata` volume
+- **gridcarbon** — API server. `entrypoint.sh` runs `alembic upgrade head`, seeds 7 days on first run, then starts `gridcarbon serve --host 0.0.0.0`
+- **ingest** — continuous pipeline (`gridcarbon ingest --interval 300`), depends on healthy postgres + started gridcarbon
+- **dashboard** — multi-stage Node build → nginx serving static SPA
+
+### Alembic
+
+Migrations use raw SQL (no ORM models). `alembic/env.py` reads `DATABASE_URL` from the environment and rewrites `postgresql://` → `postgresql+psycopg://` for SQLAlchemy driver selection. Schema: `fuel_mix`, `carbon_intensity`, `weather`, `ingestion_events` tables defined in `001_initial_schema.py`.
 
 ### weir Integration (pipeline/ingest.py)
 
@@ -74,6 +113,8 @@ The pipeline module is where weir and gridcarbon compose. Key patterns:
 
 Environment variables (all optional — NYISO direct access works without any keys):
 - `DATABASE_URL` — PostgreSQL connection string (default: `postgresql://gridcarbon:gridcarbon@localhost:5432/gridcarbon`)
+- `TEST_DATABASE_URL` — Postgres DSN for tests (defaults to `gridcarbon_test` database)
+- `VITE_API_BASE` — Dashboard API base URL (defaults to `http://localhost:8000`)
 - `EIA_API_KEY` — EIA API access
 - `WATTTIME_USERNAME` / `WATTTIME_PASSWORD` — WattTime validation
 
@@ -88,4 +129,4 @@ pytest-asyncio is configured with `asyncio_mode = "auto"`. Tests use a Postgres 
 
 ## Tech Stack
 
-Python ≥3.14, Hatchling build system. Key deps: weir (pipeline framework), httpx (HTTP), pydantic (FastAPI dependency), FastAPI/uvicorn, Typer/Rich (CLI), psycopg3 (sync Postgres), asyncpg (async Postgres), Alembic (migrations). Ruff for linting (line-length 100, target py314). `from __future__ import annotations` is not used — Python 3.14 has PEP 649 (deferred annotation evaluation) built in.
+Python ≥3.14, Hatchling build system. Key deps: weir (pipeline framework), httpx (HTTP), pydantic (FastAPI dependency), FastAPI/uvicorn, Typer/Rich (CLI), psycopg3 (sync Postgres), asyncpg (async Postgres), Alembic (migrations). Dashboard: React 18, Vite, Tailwind CSS, recharts, react-router-dom. Ruff for linting (line-length 100, target py314). `from __future__ import annotations` is not used — Python 3.14 has PEP 649 (deferred annotation evaluation) built in.

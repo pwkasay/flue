@@ -20,6 +20,10 @@ DATABASE_URL = os.environ.get(
     "postgresql://gridcarbon:gridcarbon@localhost:5432/gridcarbon",
 )
 
+# SQLAlchemy defaults postgresql:// to psycopg2. This project uses psycopg (v3).
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode — emit SQL to stdout."""
